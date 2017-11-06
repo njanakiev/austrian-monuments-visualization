@@ -6,6 +6,7 @@ import csv
 import numpy as np
 from pyproj import Proj
 from mathutils import Matrix, Vector
+from matplotlib import cm
 
 
 # Check if script is executed in Blender and get absolute path of current folder
@@ -72,6 +73,19 @@ def createLamp(origin, type='POINT', energy=1, color=(1,1,1), target=None):
     if target: trackToConstraint(obj, target)
     return obj
 
+def simpleMaterial(diffuse_color):
+    mat = bpy.data.materials.new('Material')
+
+    # Diffuse
+    mat.diffuse_shader = 'LAMBERT'
+    mat.diffuse_intensity = 0.9
+    mat.diffuse_color = diffuse_color
+
+    # Specular
+    mat.specular_intensity = 0
+
+    return mat
+
 
 def barplot(data):
     indices = np.arange(len(data))
@@ -88,6 +102,10 @@ def barplot(data):
         bmesh.ops.create_cube(bm, size=size, matrix=T*S)
 
     obj = bmeshToObject(bm)
+
+    # Add bevel modifier
+    bevel = obj.modifiers.new('Bevel', 'BEVEL')
+    bevel.width = 0.008
 
     return obj
 
@@ -116,6 +134,10 @@ def histogram(data, n=50):
                 bmesh.ops.create_cube(bm, size=size, matrix=T*S)
 
     obj = bmeshToObject(bm)
+
+    # Add bevel modifier
+    bevel = obj.modifiers.new('Bevel', 'BEVEL')
+    bevel.width = 0.008
 
     return obj
 
@@ -158,7 +180,79 @@ def heatmap(data, n=100, m=2):
 
     obj = bmeshToObject(bm)
 
+    # Add bevel modifier
+    bevel = obj.modifiers.new('Bevel', 'BEVEL')
+    bevel.width = 0.008
+
     return obj
+
+def coloredHeatmap(data, n=100, m=2, numColors=10, colormap=cm.hot):
+    indices = np.arange(len(data))
+    np.random.shuffle(indices)
+
+    # List of bmesh elements for each color group
+    bmList = [bmesh.new() for i in range(numColors)]
+
+    h, size, scale = 15, 0.04, 5
+    X = np.ndarray((n, n), dtype=object)
+    for idx in indices:
+        x, y, z = data[idx]
+        i, j = int(x * (n - 1)), int(y * (n - 1))
+        if X[i, j] is None:
+            X[i, j] = [(x, y, z)]
+        else:
+            X[i, j].append((x, y, z))
+
+    sigmaSq = 0.0001
+    #sigmaSq = 0.0003
+    grid = np.zeros((n, n))
+
+    for i0 in range(n):
+        for j0 in range(n):
+            x0, y0 = i0 / (n - 1), j0 / (n - 1)
+
+            # Sum all available neighboring elements
+            for i in range(max(0, i0 - m), min(i0 + m, n)):
+                for j in range(max(0, j0 - m), min(j0 + m, n)):
+                    if X[i, j] is not None:
+                        for x, y, z in X[i, j]:
+                            grid[i0][j0] += z*np.exp(- ((x0 - x)**2)/
+                                (2*sigmaSq) - ((y0 - y)**2)/(2*sigmaSq))
+
+    # Find maximum value
+    zMax = np.max(grid)
+
+    # Iterate over grid
+    for i in range(n):
+        for j in range(n):
+            x, y, z = i / (n - 1), j / (n - 1), grid[i][j]
+            if z > 0.01:
+                t = 1 - np.exp(-(z / zMax)/0.2)
+
+                k = min(int(numColors*t), numColors - 1)
+                T = Matrix.Translation((
+                    scale*(x - 0.5),
+                    scale*(y - 0.5),
+                    z*(h - 1)*0.5*size))
+                S = Matrix.Scale((h - 1)*z + 1, 4, (0, 0, 1))
+                bmesh.ops.create_cube(bmList[k], size=size, matrix=T*S)
+
+    objList = []
+    for i, bm in enumerate(bmList):
+        # Create object
+        obj = bmeshToObject(bm)
+
+        # Create material with colormap
+        color = colormap(i / numColors)
+        mat = simpleMaterial(color[:3])
+        obj.data.materials.append(mat)
+        objList.append(obj)
+
+        # Add bevel modifier
+        bevel = obj.modifiers.new('Bevel', 'BEVEL')
+        bevel.width = 0.008
+
+    return objList
 
 
 def loadData(path):
@@ -204,19 +298,19 @@ if __name__ == '__main__':
         type='ORTHO', ortho_scale=5.6)
     sun = createLamp((-5, 5, 10), 'SUN', target=target)
 
+    # Set background color
+    bpy.context.scene.world.horizon_color = (0.7, 0.7, 0.7)
+
     # Ambient occlusion
     bpy.context.scene.world.light_settings.use_ambient_occlusion = True
     bpy.context.scene.world.light_settings.samples = 5
 
     data = loadData(os.path.join('data', 'monuments.txt'))
 
-    #obj = barplot(data)
-    #obj = histogram(data)
-    obj = heatmap(data)
-
-    # Add bevel modifier
-    bevel = obj.modifiers.new('Bevel', 'BEVEL')
-    bevel.width = 0.008
+    #barplot(data)
+    #histogram(data)
+    #heatmap(data)
+    coloredHeatmap(data, colormap=cm.coolwarm)
 
     # Set render resolution
     bpy.context.scene.render.resolution_x = 1280
@@ -226,5 +320,5 @@ if __name__ == '__main__':
     # check if script is not executed inside Blender and render scene
     if bpy.context.space_data is None:
         bpy.context.scene.render.filepath = os.path.join(
-            os.getcwd(), 'monuments.png')
+            os.getcwd(), 'monuments_coolwarm.png')
         bpy.ops.render.render(write_still=True)
