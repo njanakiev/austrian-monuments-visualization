@@ -48,9 +48,6 @@ for file in files:
                         print(g.current_result)
                         time.sleep(1)
                         g = geocoder.arcgis(address)
-
-                location = results[0]['geometry']['location']
-                print(location['lat'], location['lng'])
             else:
                 coordinates[address]['count'] += 1
 
